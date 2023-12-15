@@ -1,0 +1,583 @@
+<!doctype html>
+<html>
+  <head>
+    <!-- Recommended shim for cross-browser WebRTC support. -->
+    <script src="https://webrtchacks.github.io/adapter/adapter-latest.js"></script>
+    <!-- Default Red5 Pro Playback Control styles. -->
+    <link href="lib/red5pro/red5pro-media.css" rel="stylesheet">
+	
+	<style>
+		.hidden {
+			visibility: hidden;
+		}
+
+		.border {
+		  border: 1px solid black;
+		}
+		
+		.padded {
+		  padding:10px;
+		}
+
+		.centerContents {
+			justify-content:center;
+			text-align:center;
+		}
+		
+		.container {
+		  display:flex;
+		}
+		
+		.panSlider {
+			width: 45px;
+			height: 10px;
+		}
+		
+		.offscreen {
+			position: absolute;
+			left: -1024px;
+			top: -1024px;
+		}
+		
+		.inlineBlock {
+			display: inline-block
+		}
+	</style>
+    <script src="lib/red5pro/red5pro-sdk.min.js"></script>
+	
+  </head>
+  <body>
+	<!-------------------- Video Player -------------------------->
+	<div id="playerContainer" class="hidden centerContents">
+		<video id="red5pro-subscriber" autoplay controls> </video>
+		<!-- Exposes `red5prosdk` on the window global. -->
+	</div>
+
+	<!-------------------- NodeGraph Controls -------------------------->
+	<div id="controls" class="container">
+		<div id="startComp" class="container">
+			<div class="border padded">
+				<b>Start New Mixer:</b><br/>
+				<label for="mixerGuidField">Mixer GUID</label> <input type="text" id="mixerGuidField" name="mixerGuidField" size="30" value="live/mix1"><br>
+				width: <input type="text" id="outputWidth" size="4" value="1920"> height: <input type="text" id="outputHeight" size="4" value="1080"><br/>
+				bitrate: <input type="text" id="bitrate" size="10" value="10000000"><br/>
+				max bitrate: <input type="text" id="maxbitrate" size="10" value="10000000"><br/>
+				qpMin: <input type="text" id="qpmin" size="4" value="28"> qpMax: <input type="text" id="qpmax" size="4" value="48"><br/>
+				framerate: <input type="text" id="framerate" size="3" value="30"><br/>
+				audiorate: <input type="text" id="audiorate" size="3" value="48000"><br/>
+				<button type="button" onclick="newMixer()">New Mixer</button>
+			</div>
+		</div>
+		<div id="stopComp" class="container hidden">
+			<div id="global" class="border padded">
+				<button type="button" onclick="stopMixer()">STOP COMPOSITION</button>
+				<hr/>
+				<label for="bgColor">Background Color</label> <input type="color" id="bgColor" name="bgColor" value="#000000" oninput="updateServerNodeGraph()">
+				<hr/>
+				gridWidth: <input type="number" id="gridWidth" size="4" value="4"><br/>
+				gridHeight: <input type="number" id="gridHeight" size="4" value="3"><br/>
+				<button type="button" onclick="fitGrid()">Fit to Grid</button>
+				<hr/>
+				guid: <input type="text" id="newStreamGuid" size="30" value="live/stream"><br/>
+				consecutive: <input type="number" id="newStreamConsec" size="4" value="1"><br/>
+				<button type="button" onclick="addStream()">Add Stream</button>
+			</div>
+			<div id="videoControls" class="container">
+			</div>
+			<div id="audioControls" class="container">
+			</div>
+		</div>		
+	</div>
+	
+	<!-- offscreen/hidden -->
+	<div id="videoControlTemplate" class="border padded offscreen">
+		<div id="streamLabel"><h3>live/stream2</h3>Video Placement</div>
+		<br/>
+		<div class="container">
+			<div class="padded">
+				<label>destX<br/>
+					<input type="range" id="destX" name="destX" min="0" max="1920" orient="vertical" oninput="updateServerNodeGraph()">
+				</label> 
+			</div>
+			<div class="padded">
+				<label>destY<br/>
+					<input type="range" id="destY" name="destY" min="0" max="1080" orient="vertical" oninput="updateServerNodeGraph()">
+				</label> 
+			</div>
+			<div class="padded">
+				<label>destW<br/>
+					<input type="range" id="destWidth" name="destWidth" min="0" max="639" orient="vertical" oninput="updateServerNodeGraph()">
+				</label> 
+			</div>
+			<div class="padded">
+				<label>destH<br/>
+					<input type="range" id="destHeight" name="destHeight" min="0" max="479" orient="vertical" oninput="updateServerNodeGraph()">
+				</label> 
+			</div>
+		</div>
+	</div>
+	<div id="audioControlTemplate" class="border offscreen">
+		<div class="padded"><b>stream2</b></div>
+		<br/>
+		<div class="padded">
+			<label>Pan<br/>
+				<input type="range" id="pan" name="pan" min="-100" max="100" value="0" orient="horizontal" class="panSlider" oninput="updateServerNodeGraph()">
+			</label> 
+		</div>
+		<br/>
+		<div class="padded">
+			<label>Volume<br/>
+				<input type="range" id="volume" name="volume" min="-96" max="0" value="-96" orient="vertical" oninput="updateServerNodeGraph()">
+			</label> 
+		</div>				
+	</div>
+	
+	<div class="hidden">
+		<textarea id="defaultNodeGraph">
+[
+  {
+    "rootVideoNode": {
+      "nodes": [
+        {
+          "red": 0.0,
+          "green": 0.0,
+          "blue": 0.0,
+          "alpha": 1.0,
+          "node": "SolidColorNode"
+        }
+      ],
+      "node": "CompositorNode"
+    },
+    "rootAudioNode": {
+      "nodes": [
+      ],
+      "node": "SumNode"
+    }
+  }
+]		</textarea>
+	</div>
+	
+	<script>
+		var globalNodeGraph = null;
+
+		const urlParams = new URLSearchParams(window.location.search);
+		var host = location.hostname; 
+		var streamGuid = urlParams.get('mixer');
+		var streamPath = "";
+		var streamName = "";
+		
+		function initStreamGuid() {
+			if (!streamGuid) {
+				streamGuid = "live/mix1";
+			}
+
+			var lastI = (!streamGuid) ? 0 : streamGuid.lastIndexOf("/")
+			streamPath = (!streamGuid) ? "" : streamGuid.substring(0, lastI);
+			streamName = (!streamGuid) ? "" : streamGuid.substring(lastI + 1);
+			
+			mixerGuidField.value = streamGuid;
+		}
+		initStreamGuid(); // and invoke it right away
+
+		if (!host) {
+			host = "localhost";
+		}
+			
+		async function fetchNodeGraph() {
+			const response = await fetch('http://' + host + ":5080/mixer/" + streamName).catch((error) => { console.log("hey i caught this error: " + error) });
+			
+			var result = null;
+			if (response.ok) {
+				result = await response.json(); 
+				console.log("NODEGRAPH RESPONSE: " + JSON.stringify(result, null, 4));
+			} else {
+				console.log("NODEGRAPH RESPONSE ERROR " + response.status);				
+			}
+			
+			return result;
+		}
+	
+		function addStream() {
+			for (i = 0; i < newStreamConsec.value; i++) {
+				newGuid = newStreamGuid.value + (i + 1);
+				// create and add a new VideoSourceNode
+				const videoSourceNode = {
+				  "streamGuid": newGuid,
+				  "sourceX": 0,
+				  "sourceY": 0,
+				  "sourceWidth": 640,
+				  "sourceHeight": 480,
+				  "destX": 160,
+				  "destY": 120,
+				  "destWidth": 320,
+				  "destHeight": 240,
+				  "node": "VideoSourceNode"
+				};
+				globalNodeGraph.rootVideoNode.nodes.push(videoSourceNode);
+
+				// create and add a new AudioSourceNode
+				var audioSourceNode = {
+				  "streamGuid": newGuid,
+				  "pan": 0.0,
+				  "gain": -96.0,
+				  "node": "AudioSourceNode"
+				};
+				globalNodeGraph.rootAudioNode.nodes.push(audioSourceNode);
+
+				// update server (without scraping UI)
+				innerUpdateServerNodeGraph();
+				
+				// update the UI with the new data
+				innerInit();
+			}
+		}
+		
+		// https://stackoverflow.com/questions/4427094/how-can-i-duplicate-a-div-onclick-event
+		function duplicate(elementId) {
+			var original = document.getElementById(elementId);
+			var clone = original.cloneNode(true); // "deep" clone
+			clone.id = ""; // there can only be one element with an ID
+			document.getElementById(elementId).parentNode.appendChild(clone);
+			
+			return clone;
+		}
+		
+		// https://stackoverflow.com/questions/14603205/how-to-convert-hex-string-into-a-bytes-array-and-a-bytes-array-in-the-hex-strin
+		function hexToBytes(hex) {
+			for (var bytes = [], c = 0; c < hex.length; c += 2)
+			bytes.push(parseInt(hex.substr(c, 2), 16));
+			return bytes;
+		}
+		
+		function bytesToHex(bytes) {
+			for (var hex = [], i = 0; i < bytes.length; i++) {
+				var current = bytes[i] < 0 ? bytes[i] + 256 : bytes[i];
+				hex.push((current >>> 4).toString(16));
+				hex.push((current & 0xF).toString(16));
+			}
+			return hex.join("");
+		}
+
+		
+		function updateUiFromData() {
+			// background color from first node (SolidColorNode)
+			var r = Math.floor(globalNodeGraph.rootVideoNode.nodes[0].red * 255.0);
+			var g = Math.floor(globalNodeGraph.rootVideoNode.nodes[0].green * 255.0);
+			var b = Math.floor(globalNodeGraph.rootVideoNode.nodes[0].blue * 255.0);
+			var hex = bytesToHex([r,g,b]);
+			document.getElementById("bgColor").value = "#" + hex;
+			
+			// iterate video source nodes
+			for (var i = 1; i < globalNodeGraph.rootVideoNode.nodes.length; i++) {
+				var n = globalNodeGraph.rootVideoNode.nodes[i];
+				if (n.node == "VideoSourceNode") {
+					var c = document.getElementById("video." + encodeURIComponent(n.streamGuid));
+					c.children[0].children[0].innerText = n.streamGuid;
+					c.children[2].children[0].children[0].children[1].value = n.destX;
+					c.children[2].children[1].children[0].children[1].value = n.destY;
+					c.children[2].children[2].children[0].children[1].value = n.destWidth;
+					c.children[2].children[3].children[0].children[1].value = n.destHeight;					
+				}
+			}
+			
+			for (var i = 0; i < globalNodeGraph.rootAudioNode.nodes.length; i++) {
+				var n = globalNodeGraph.rootAudioNode.nodes[i];
+				if (n.node == "AudioSourceNode") {
+					var c = document.getElementById("audio." + encodeURIComponent(n.streamGuid));
+					console.log("Audio source: " + n.streamGuid);
+
+					c.children[2].children[0].children[1].value = n.pan;
+					c.children[4].children[0].children[1].value = n.gain;
+				}
+			}
+			
+			console.log("BG Color: " + hex + " from {" + r + "," + g + "," + b + "}");
+		}
+		
+		function getDataFromUi() {
+			// background color to first node (SolidColorNode)
+			var bytes = hexToBytes(document.getElementById("bgColor").value.substring(1));
+			globalNodeGraph.rootVideoNode.nodes[0].red = bytes[0] / 255.0;
+			globalNodeGraph.rootVideoNode.nodes[0].green = bytes[1] / 255.0;
+			globalNodeGraph.rootVideoNode.nodes[0].blue = bytes[2] / 255.0;
+			globalNodeGraph.rootVideoNode.nodes[0].alpha = 1.0;
+			
+			var outputWidth = document.getElementById("outputWidth").value;
+			var outputHeight = document.getElementById("outputHeight").value;
+			console.log(`getDataFromUi(). outputWidth: ${outputWidth}, outputHeight: ${outputHeight} `);
+			for (var i = 1; i < globalNodeGraph.rootVideoNode.nodes.length; i++) {
+				var n = globalNodeGraph.rootVideoNode.nodes[i];
+				if (n.node == "VideoSourceNode") {
+					var c = document.getElementById("video." + encodeURIComponent(n.streamGuid));
+					n.destX = c.children[2].children[0].children[0].children[1].value;
+					n.destY = c.children[2].children[1].children[0].children[1].value;
+					n.destWidth = c.children[2].children[2].children[0].children[1].value;
+					n.destHeight = c.children[2].children[3].children[0].children[1].value;	
+
+					if (Number(n.destX) + Number(n.destWidth) >= outputWidth) {
+						n.destX = outputWidth - Number(n.destWidth) - 1;
+						console.log("scooch");
+					}
+					if (Number(n.destY) + Number(n.destHeight) >= outputHeight) {
+						n.destY = outputHeight - Number(n.destHeight) - 1;
+						console.log("scooch");
+					}
+				}
+			}
+			
+			for (var i = 0; i < globalNodeGraph.rootAudioNode.nodes.length; i++) {
+				var n = globalNodeGraph.rootAudioNode.nodes[i];
+				if (n.node == "AudioSourceNode") {
+					var c = document.getElementById("audio." + encodeURIComponent(n.streamGuid));
+					n.pan = c.children[2].children[0].children[1].value;
+					n.gain = c.children[4].children[0].children[1].value;
+				}
+			}
+		}
+		
+		// send the globalNodeGraph to the server
+		function innerUpdateServerNodeGraph() {
+			var xhttp = new XMLHttpRequest();
+			xhttp.onreadystatechange = function() {
+			  if (this.readyState == 4 && this.status == 200) {
+				console.log("innerUpdateServerNodeGraph response: " + this.responseText);
+			  }
+			};
+			xhttp.open("PUT", "/mixer/" + streamName, false); // false: one at a time, synchronous, wait for response
+			xhttp.setRequestHeader("Content-type", "application/json");
+
+			var jsonRequest = JSON.stringify([globalNodeGraph]); // the request contains an array of one nodegraph
+			console.log("update request: " + jsonRequest);
+			xhttp.send(jsonRequest);		
+		}
+		
+		// update the globalNodeGraph from UI, and THEN send it to the server
+		function updateServerNodeGraph() {
+			getDataFromUi();
+			innerUpdateServerNodeGraph();
+		}
+		
+		function fitGrid() {
+			// read the desired grid size from UI
+			gridWidth = document.getElementById("gridWidth").value;
+			gridHeight = document.getElementById("gridHeight").value;
+			console.log("fit to grid: " + gridWidth + " x " + gridHeight);
+			
+			// determine how many videos from the nodegraph to fit into the grid, and aspect ratio of first
+			vidCount = Math.min(globalNodeGraph.rootVideoNode.nodes.length - 1, gridWidth * gridHeight)
+			if (vidCount > 0) {
+				// aspect ratio of source streams (assumes homogeneity)
+				aspect = globalNodeGraph.rootVideoNode.nodes[1].sourceWidth / globalNodeGraph.rootVideoNode.nodes[1].sourceHeight;
+
+				// mixer framebuffer dimensions
+				outputWidth = document.getElementById("outputWidth").value;
+				outputHeight = document.getElementById("outputHeight").value;
+				
+				// grid cell size (who knows what aspect)
+				gW = outputWidth / gridWidth;
+				gH = outputHeight / gridHeight;
+				
+				// determine scaling factors sW and sH
+				sW = gW / globalNodeGraph.rootVideoNode.nodes[1].sourceWidth;
+				sH = gH / globalNodeGraph.rootVideoNode.nodes[1].sourceHeight;
+				
+				// the minimum scale factor is the one that will fit
+				isScaleWidth = sW <= sH;
+				s = Math.min(sW, sH);
+				
+				// width and height of our videos in a grid
+				nW = s * globalNodeGraph.rootVideoNode.nodes[1].sourceWidth;
+				nH = s * globalNodeGraph.rootVideoNode.nodes[1].sourceHeight;
+			
+				console.log(`w: ${globalNodeGraph.rootVideoNode.nodes[1].sourceWidth}, h: ${globalNodeGraph.rootVideoNode.nodes[1].sourceHeight}, aspect: ${aspect}, nW: ${nW}, nH: ${nH}`);
+			
+				// scale and position the videos (and crop to fit if they're the wrong aspect)
+				didUpdate = false;
+				outer:
+				for (j = 0; j < gridHeight; j++) {
+					for (i = 0; i < gridWidth; i++) {
+						index = j * gridWidth + i + 1; // +1: the first node is SolidColorNode so the video nodes begin at index 1.
+
+						// if all the videos have been placed (if the current cell is empty)
+						if (index > vidCount) {
+							break outer;
+						}
+						
+						globalNodeGraph.rootVideoNode.nodes[index].destX = nW * i;
+						globalNodeGraph.rootVideoNode.nodes[index].destY = nH * j;
+						globalNodeGraph.rootVideoNode.nodes[index].destWidth = nW;
+						globalNodeGraph.rootVideoNode.nodes[index].destHeight = nH;
+						didUpdate = true;
+						
+						console.log(`${globalNodeGraph.rootVideoNode.nodes[index].streamGuid} at (${i},${j}): (${nW * i}, ${nH * j})`); 
+					}
+				}
+				
+				if (didUpdate) {
+					updateUiFromData();
+					updateServerNodeGraph();
+				}
+			}
+		}
+
+		function stopMixer() {
+			if (window.confirm("Really stop mixer and end stream?")) {
+				var xhttp = new XMLHttpRequest();
+				xhttp.onreadystatechange = function() {
+					if (this.readyState == 4 && this.status == 200) {
+						console.log("stopMixer response: " + this.responseText);
+					}
+				};
+				xhttp.open("DELETE", "/mixer?event=" + streamName, true);
+				xhttp.setRequestHeader("Content-type", "application/x-www-form-urlencoded");
+				xhttp.send();
+			}
+		}
+		
+		async function newMixer() {
+			// parse mixer stream GUID and set global path/name vars
+			streamGuid = mixerGuidField.value;
+			initStreamGuid();
+			
+			// start the mixer
+			var xhttp = new XMLHttpRequest();
+			xhttp.onreadystatechange = async function() {
+				if (this.readyState == 4 && this.status == 200) {
+					console.log("newMixer response: " + this.responseText);
+					
+					// create the default nodegraph
+					globalNodeGraph = JSON.parse(defaultNodeGraph.value)[0];
+					innerUpdateServerNodeGraph();
+					
+					// sleep before subscribe
+					await new Promise(r => setTimeout(r, 1000));
+					
+					// init / start subscription
+					init();
+				}
+			};
+			
+			outputWidth = document.getElementById("outputWidth").value
+			outputHeight = document.getElementById("outputHeight").value
+			bitrate = document.getElementById("bitrate").value
+			qpmin = document.getElementById("qpmin").value
+			qpmax = document.getElementById("qpmax").value
+			maxbitrate = document.getElementById("maxbitrate").value
+			framerate = document.getElementById("framerate").value
+			audiorate = document.getElementById("audiorate").value
+			
+			xhttp.open("POST", "/mixer", true);
+			xhttp.setRequestHeader("Content-type", "application/x-www-form-urlencoded");
+			xhttp.send("action=start&doForward=true&sessionId=" + streamName //
+					+ "&mixerDigest=" + "anything" // this is not used in standalone context (only when clustered)
+					+ "&originIP=" + "127.0.0.1" //
+					+ "&event=" + streamName //
+					+ "&path=" + streamPath //
+					+ "&streamName=" + streamName //
+					+ "&width=" + outputWidth //
+					+ "&height=" + outputHeight //
+					+ "&bitrate=" + bitrate //
+					+ "&qpmin=" + qpmin //
+					+ "&qpmax=" + qpmax //
+					+ "&maxbitrate=" + maxbitrate //
+					+ "&framerate=" + framerate //
+					+ "&audioSampleRate=" + audiorate //
+					+ "&audioChannels=" + 2 // always stereo
+					+ "&submixes=" + 1); // only one output mixer
+		}
+		
+		function startSubscription() {
+			// Create a new instance of the WebRTC subcriber.
+			var subscriber = new red5prosdk.RTCSubscriber();
+
+			// Initialize
+			subscriber.init({
+				protocol: 'ws',
+				port: 5080,
+				host: host,
+				app: streamPath,
+				streamName: streamName,
+				rtcConfiguration: {
+				iceServers: [{urls: 'stun:stun2.l.google.com:19302'}],
+				iceCandidatePoolSize: 2,
+				bundlePolicy: 'max-bundle'
+				}, // See https://developer.mozilla.org/en-US/docs/Web/API/RTCPeerConnection/RTCPeerConnection#RTCConfiguration_dictionary
+				mediaElementId: 'red5pro-subscriber',
+				subscriptionId: streamName + Math.floor(Math.random() * 0x10000).toString(16),
+				videoEncoding: 'NONE',
+				audioEncoding: 'NONE'
+			})
+			.then(function(subscriber) {
+				// `subcriber` is the WebRTC Subscriber instance.
+				return subscriber.subscribe();
+			})
+			.then(function(subscriber) {
+				// subscription is complete.
+				// playback should begin immediately due to
+				//   declaration of `autoplay` on the `video` element.
+			})
+			.catch(function(error) {
+				// A fault occurred while trying to initialize and playback the stream.
+				console.error(error)
+			});
+		}
+
+		// global counter for the number of video control sets added to the DOM so far
+		var videosAdded = 0;
+		
+		function innerInit() {
+			// add elements as required
+			// skip the first node, which should be SolidColorNode for background
+			for (var i = 1; i < globalNodeGraph.rootVideoNode.nodes.length; i++) {
+				var n = globalNodeGraph.rootVideoNode.nodes[i];
+				// only create new controls for new videos that don't have controls yet
+				if (n.node == "VideoSourceNode" && i > videosAdded) {
+					console.log("innerInit() -- Video Source: " + n.streamGuid + " there are " + videosAdded + " videos so far, this one is " + i);
+					newVideoControls = duplicate("videoControlTemplate");
+					newVideoControls.id = "video." + encodeURIComponent(n.streamGuid);
+					newVideoControls.children[0].children[0].innerHTML = n.streamGuid;
+					newVideoControls.classList.toggle("offscreen");
+					document.getElementById("videoControls").appendChild(newVideoControls);
+					newAudioControls = duplicate("audioControlTemplate");
+					newAudioControls.id = "audio." + encodeURIComponent(n.streamGuid);
+					newAudioControls.children[0].children[0].innerHTML = n.streamGuid;
+					newAudioControls.classList.toggle("offscreen");
+					document.getElementById("audioControls").appendChild(newAudioControls);
+					videosAdded++;
+				}
+			}
+		}
+		
+		function init() {
+			// first, use the query params and try to get the nodegraph for the specified stream (if any).
+			// if it exists, start subscription, show controls etc
+			// [if it doesn't exist, only show the Start New Mixer controls (default behavior for simplicity)]
+			fetchNodeGraph().then(nodeGraph => {
+				if (nodeGraph) {
+					// show controls
+					startComp.classList.toggle("hidden", force=true);
+					stopComp.classList.toggle("hidden", force=false);
+					playerContainer.classList.toggle("hidden", force=false);
+					
+					// assign the global ref
+					globalNodeGraph = nodeGraph[0];
+					
+					innerInit();
+			
+					// update new UI elements using the global nodegraph
+					updateUiFromData();
+					
+					// start subscription;
+					startSubscription();
+				}
+			});
+			
+			// if they stop the mixer, hide the other controls and revert to only New Mixer controls.
+			// rely on the subscriber client to stop on its own.
+		}
+		
+		window.onload = init;
+	</script>
+
+  </body>
+</html>
