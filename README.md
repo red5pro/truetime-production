@@ -1,4 +1,4 @@
-# TrueTime MultiView™ for Production
+# [TrueTime MultiView™ for Production](https://www.red5.net/truetime/watchparty-for-production/)
 
 With TrueTime MultiView™ for Production, create custom displays of live streams. Switch between feeds, rely on full synchronization, and enjoy sub-400ms latency.
 
@@ -26,7 +26,7 @@ The native layer performs the low-level tasks of compositing video and mixing au
 
 ## BrewMixer API
 
-[BrewMixer API documentation](doc/BrewMixer_REST_API.md) can be found separately.
+[BrewMixer API documentation](https://www.red5.net/docs/red5-pro/development/api/mixer/brew-mixer-api/) can be found separately.
 
 ## How to install
 
@@ -60,7 +60,7 @@ Assuming you have installed on `localhost`, navigate to `http://localhost:5080/b
 
 Note this HTTP connection and unsecure port 5080, otherwise the page mixes unsecure content.
 
-Information about using the [RenderTree Controller](doc/RenderTreeController.md) can be found in its own document.
+Information about using the [RenderTree Controller](https://www.red5.net/docs/red5-pro/users-guide/mixer/brew-mixer-rendertreecontroller/) can be found in its own document.
 
 ## Configuration
 
